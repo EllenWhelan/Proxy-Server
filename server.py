@@ -3,12 +3,12 @@ import socket
 import sys
 import threading
 import os
-#import zlib
+import zlib
 
 ##some globals 
-BACKLOG = 50             #arbitrary tcp backlog number
+BACKLOG = 50                  #arbitrary tcp backlog number
 BUFF = 16000                  #google suggested to use this size 
-USERPORT = "8000"             #always 8080 on this machine - change in system proxy settings
+USERPORT = "3000"             #always 8080 on this machine - change in system proxy settings
 #blocking globals 
 BLOCKED_URLS_FILE = "blocked.txt"      #Name of blocked lists file used to fetch later
 urls_blocked = []               #list of blocked urls
@@ -17,7 +17,8 @@ cache ={}                       #hash map
 cache_entry =[]                 #cache entry temp list
 
 #function sets up and handles user interactions
-def Main(): 
+def Main(): 2
+
     #read in blocked URLS from file
     block_temp = open(BLOCKED_URLS_FILE, "r")
     for i in block_temp:
@@ -33,7 +34,7 @@ def Main():
                     try:
                         run()
                     except socket.error :
-                        print("Error")
+                        print("Error- in use")
                         pass
                     except ValueError:
                         print("Invalid input")
@@ -74,24 +75,34 @@ def Main():
 #fucntion to print blocked urls 
 def block_print():
     print("URLS BLOCKED:")
-                #print all da blocked URLs 
+    #print all da blocked URLs 
     for url in urls_blocked:
         print(url.strip()) #take off first and last 
 
-  #Function to block and unblock urls
+#Function to block and unblock urls
 def blocker(user_url, blockBool): #:)
     #blocked
     if(blockBool):
-        #add to blocked list 
+        block(user_url)
+        return
+    #unblocked
+    elif not blockBool:
+        unblock(user_url)
+        return  
+
+#function to block
+def block(user_url):
+    #add to blocked list 
         urls_blocked.append(user_url)
         #add to blocked file
         temp_file = open(BLOCKED_URLS_FILE, "a+")
         temp_file.write(user_url +"\n")
         temp_file.close()
         return
-    #unblocked
-    elif not blockBool:
-        try:
+
+#function to unblock
+def unblock(user_url): 
+    try:
             #remove from list 
             urls_blocked.remove(user_url+"\n")
             #overwrite file with lines except blocked url 
@@ -106,9 +117,16 @@ def blocker(user_url, blockBool): #:)
             temp_file.close()
 
                     
-        except ValueError:
+    except ValueError:
             return
-        return  
+
+#function to check block   
+def block_check(server):
+    for i in urls_blocked:
+            if(i.lower().strip() == server.lower().strip()):
+                print("That's a blocked URL")
+                return True
+    return False
 
 #creates and manages server and threads lol
 def run(): #
@@ -147,20 +165,16 @@ def request_parser(conn, request):
         #parse url
         line_1 = request.split('\n')[0] #split into list and get first item 
         url = line_1.split(' ')[1] #url is second item in first line list 
-        http_index = url.find("://") #pos of http
-        if(http_index== -1):
+        if((url.find("://"))== -1):
             temp_url = url #if no http
         else:
-            temp_url = url[(http_index+3):] #if http
+            temp_url = url[((url.find("://"))+3):] #if http
         #parse port
         port_index = temp_url.find(":")
         server_index= temp_url.find("/")
         if( server_index== -1):
             server_index = len(temp_url)
-       
-        #initialise server and port
-        server = ""
-        port = -1
+     
 
         if (port_index==-1 or server_index <port_index):
             port = 80 #default
@@ -173,54 +187,62 @@ def request_parser(conn, request):
     except Exception, e:
         pass
 
-#sends data to browser
-def relayer(server, port, conn, request, line_1):
+#function for request in cache
+def cache_case(request, conn):
     try:
-        #url block check 
-       # check=block_check(server)
-        for i in urls_blocked:
-            if(i.lower().strip() == server.lower().strip()):
-                print("That's a blocked URL")
-                conn.close()
-                return 
-
-        # case for cached data 
-        try:
             while True:
                 if cache[request]:
                     reply = cache[request]
                     for data in reply:
                         conn.send(data)
-                        print("Cached Request")
+                        print("Cached Request sent to browser")
 
             conn.close()
             return
-        except KeyError:
+    except KeyError:
             pass
+    return   
 
-        #sending request 
-        #open new socket and make request to web server
-        new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        new_socket.connect((server, port))
-        new_socket.send(request)
+#function for request not in cache
+def uncached_case(request,conn, server,port):
+    #create new sockets 
+    #open new socket and send data to browser and also cache it 
+    new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    new_socket.connect((server, port))
+    new_socket.send(request)
 
-        while True:
-            #sends data to browser and caches response
-            response = new_socket.recv(BUFF)
-            if(len(response)>0): #if succesful response 
-                cache_entry.append(resonse)
-                conn.send(response)
-                print("Response sent to browser and added to cache  : " + server)
-                cache[request] = cache_entry
-            else:
-                break
+    while True:
+        #sends data to browser and caches response
+        response = new_socket.recv(BUFF)
+        if(len(response)>0): #if succesful response 
+            cache_entry.append(response)
+            conn.send(response)
+            print("Response sent to browser and added to cache  : " + server)
+            cache[request]=cache_entry
+        else:
+            break
 
-        s.close()
-        conn.close()
+    s.close()
+    conn.close()
+    return 
 
+#sends data to browser
+def relayer(server, port, conn, request, line_1):
+    try:
+        #url block check 
+        if(block_check(server)):
+            conn.close()
+            return 
+
+        # case for cached data 
+        if(cache[request]):
+            cache_case(request,conn)
+        uncached_case(request,conn,server,port)
+        
     except socket.error:
         s.close()
         conn.close()
+        print("error")
         sys.exit()
 
     except KeyboardInterrupt:
